@@ -1,102 +1,119 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-シンプルな電卓プログラム
-四則演算と履歴機能を提供します。
+シンプルな電卓（REPL）
+
+機能:
+ - 四則演算（+ - * /）
+ - 式の評価（括弧、浮動小数点、負の数対応）
+ - 計算履歴（最新10件）
 """
+from collections import deque
+import ast
+import operator
+import sys
 
-import os
 
-class Calculator:
-    def __init__(self):
-        """電卓の初期化"""
-        self.history = []
-    
-    def add(self, a, b):
-        """足し算"""
-        result = a + b
-        self.history.append(f"{a} + {b} = {result}")
-        return result
-    
-    def subtract(self, a, b):
-        """引き算"""
-        result = a - b
-        self.history.append(f"{a} - {b} = {result}")
-        return result
-    
-    def multiply(self, a, b):
-        """掛け算"""
-        result = a * b
-        self.history.append(f"{a} × {b} = {result}")
-        return result
-    
-    def divide(self, a, b):
-        """割り算"""
-        if b == 0:
-            raise ValueError("ゼロで割ることはできません")
-        result = a / b
-        self.history.append(f"{a} ÷ {b} = {result}")
-        return result
-    
-    def show_history(self):
-        """計算履歴を表示"""
-        if not self.history:
-            print("計算履歴はありません。")
-            return
-        print("\n=== 計算履歴 ===")
-        for i, calculation in enumerate(self.history, 1):
-            print(f"{i}. {calculation}")
-    
-    def clear_history(self):
-        """履歴をクリア"""
-        self.history.clear()
-        print("履歴をクリアしました。")
+class CalcError(Exception):
+    pass
+
+
+class _Evaluator(ast.NodeVisitor):
+    """AST を検査して安全に式を評価する。"""
+    ALLOWED_OPERATORS = {
+        ast.Add: operator.add,
+        ast.Sub: operator.sub,
+        ast.Mult: operator.mul,
+        ast.Div: operator.truediv,
+        ast.USub: operator.neg,
+        ast.UAdd: operator.pos,
+    }
+
+    def visit(self, node):
+        if isinstance(node, ast.Expression):
+            return self.visit(node.body)
+        return super().visit(node)
+
+    def visit_BinOp(self, node):
+        left = self.visit(node.left)
+        right = self.visit(node.right)
+        op_type = type(node.op)
+        if op_type in self.ALLOWED_OPERATORS:
+            try:
+                return self.ALLOWED_OPERATORS[op_type](left, right)
+            except ZeroDivisionError:
+                raise CalcError("ゼロ除算")
+        raise CalcError("許可されていない演算子")
+
+    def visit_UnaryOp(self, node):
+        operand = self.visit(node.operand)
+        op_type = type(node.op)
+        if op_type in self.ALLOWED_OPERATORS:
+            return self.ALLOWED_OPERATORS[op_type](operand)
+        raise CalcError("許可されていない単項演算子")
+
+    def visit_Num(self, node):
+        return node.n
+
+    def visit_Constant(self, node):
+        if isinstance(node.value, (int, float)):
+            return node.value
+        raise CalcError("数値以外は許可されていません")
+
+    def generic_visit(self, node):
+        raise CalcError(f"許可されていない構文: {type(node).__name__}")
+
+
+def evaluate_expression(expr: str):
+    """式を評価して結果（float または int）を返す。
+
+    Raises CalcError on invalid expressions.
+    """
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as e:
+        raise CalcError("文法エラー") from e
+    evaluator = _Evaluator()
+    return evaluator.visit(tree)
+
 
 def main():
-    """メイン関数"""
-    calc = Calculator()
-    
+    print("シンプル電卓 - 終了: exit, 履歴: history, クリア: clear")
+    history = deque(maxlen=10)
     while True:
-        print("\n=== 電卓プログラム ===")
-        print("1. 足し算")
-        print("2. 引き算") 
-        print("3. 掛け算")
-        print("4. 割り算")
-        print("5. 履歴表示")
-        print("6. 履歴クリア")
-        print("7. 終了")
-        
         try:
-            choice = input("\n操作を選択してください (1-7): ")
-            
-            if choice == "7":
-                print("電卓プログラムを終了します。")
-                break
-            elif choice == "5":
-                calc.show_history()
-            elif choice == "6":
-                calc.clear_history()
-            elif choice in ["1", "2", "3", "4"]:
-                a = float(input("最初の数値を入力してください: "))
-                b = float(input("2番目の数値を入力してください: "))
-                
-                if choice == "1":
-                    result = calc.add(a, b)
-                elif choice == "2":
-                    result = calc.subtract(a, b)
-                elif choice == "3":
-                    result = calc.multiply(a, b)
-                elif choice == "4":
-                    result = calc.divide(a, b)
-                
-                print(f"結果: {result}")
-            else:
-                print("無効な選択です。1-7の範囲で選択してください。")
-                
-        except ValueError as e:
-            print(f"エラー: {e}")
-        except Exception as e:
-            print(f"予期しないエラーが発生しました: {e}")
+            s = input('> ').strip()
+        except (EOFError, KeyboardInterrupt):
+            print('\n終了')
+            return
+
+        if not s:
+            continue
+        if s.lower() in ("exit", "quit"):
+            print("終了")
+            return
+        if s.lower() == "history":
+            if not history:
+                print("履歴はありません")
+                continue
+            for i, (expr, res) in enumerate(history, 1):
+                print(f"{i}: {expr} = {res}")
+            continue
+        if s.lower() == "clear":
+            history.clear()
+            print("履歴をクリアしました")
+            continue
+
+        try:
+            result = evaluate_expression(s)
+        except CalcError as e:
+            print("エラー:", e)
+            continue
+        # 整数のときは整数として表示
+        if isinstance(result, float) and result.is_integer():
+            result = int(result)
+        print(result)
+        history.append((s, result))
+
 
 if __name__ == "__main__":
     main()
